@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Socializer</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
+</head>
+<body>
+<div class="auth-container">
+    <h1>Welcome Back! 👋</h1>
+
+    <form id="login-form" class="auth-form">
+        <div class="form-group">
+            <label for="login-username">Username</label>
+            <input type="text" id="login-username" name="username" class="form-control" required>
+        </div>
+
+        <div class="form-group">
+            <label for="login-password">Password</label>
+            <input type="password" id="login-password" name="password" class="form-control" required>
+        </div>
+
+        <div id="login-error" class="alert alert-danger" style="display: none;"></div>
+
+        <div class="form-actions mt-3">
+            <button type="submit" id="login-button" class="btn btn-primary w-100">
+                <span class="login-text">Login</span>
+                <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+            </button>
+        </div>
+
+        <div class="form-footer mt-3 text-center">
+            Don't have an account? <a href="/register">Register here</a>
+        </div>
+    </form>
+</div>
+
+<!-- CRITICAL FIX: Inline cookie fix (overrides cached JS) -->
+<script>
+console.log('🔧 Inline cookie fix loaded');
+
+// Override fetch to intercept /token response
+const originalFetch = window.fetch;
+window.fetch = async function(...args) {
+    const response = await originalFetch.apply(this, args);
+    
+    // If this is a token request, set the cookie immediately
+    if (args[0] && args[0].includes('/token')) {
+        console.log('🔍 Intercepted /token request');
+        
+        const clonedResponse = response.clone();
+        const data = await clonedResponse.json();
+        
+        if (data.access_token) {
+            console.log('✅ Token received, setting cookie NOW');
+            
+            // Set cookie with proper settings
+            const cookieValue = `access_token=Bearer ${data.access_token}`;
+            const cookieOptions = 'Path=/; SameSite=Lax; Max-Age=3600';
+            const fullCookie = `${cookieValue}; ${cookieOptions}`;
+            
+            document.cookie = fullCookie;
+            console.log('✅ Cookie set:', fullCookie);
+            console.log('✅ Verify cookie:', document.cookie);
+            
+            // Also store in localStorage as backup
+            localStorage.setItem('auth_token', JSON.stringify({
+                access_token: data.access_token,
+                token_type: 'bearer',
+                created_at: Math.floor(Date.now() / 1000)
+            }));
+            console.log('✅ LocalStorage backup saved');
+        }
+    }
+    
+    return response;
+};
+
+console.log('✅ Fetch interceptor installed');
+</script>
+
+<script type="module" src="{{ url_for('static', path='/js/auth/index.js') }}?v={{ request.headers.get('cache-bust', '20251016') }}"></script>
+<!-- Development test script - Remove in production -->
+<script type="module" src="{{ url_for('static', path='/js/tests/authFlowTest.js') }}?v={{ request.headers.get('cache-bust', '20251016') }}"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const errorParam = urlParams.get('error');
+        const registeredParam = urlParams.get('registered');
+
+        if (errorParam) {
+            const errorElement = document.getElementById('login-error');
+            if (errorElement) {
+                errorElement.textContent = decodeURIComponent(errorParam);
+                errorElement.style.display = 'block';
+            }
+        }
+
+        if (registeredParam === '1') {
+            const successElement = document.getElementById('login-success') || 
+                                 document.getElementById('login-error');
+            if (successElement) {
+                successElement.textContent = 'Registration successful! Please log in.';
+                successElement.style.color = '#28a745';
+                successElement.style.display = 'block';
+            }
+        }
+    });
+</script>
+</body>
+</html>
