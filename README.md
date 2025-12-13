@@ -1,11 +1,19 @@
-# Socializer 🚀
+# Socializer 1.0 - Stable Local Version 🚀
 
-[![Python CI](https://github.com/yourusername/socializer/actions/workflows/ci.yml/badge.svg)](https://github.com/yourusername/socializer/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/yourusername/socializer/graph/badge.svg?token=YOUR_TOKEN_HERE)](https://codecov.io/gh/yourusername/socializer)
-[![Python Version](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11-blue.svg)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)]()
+[![Status](https://img.shields.io/badge/status-stable-green.svg)]()
 
 A modern social AI chat application built with FastAPI, SQLAlchemy, and LangChain. Socializer provides an intelligent chat interface with user management, conversation history, and AI-powered responses.
+
+## 📚 Documentation Quick Links
+
+- **[🚀 Quick Start](QUICK_START.md)** - Get running in 5 minutes
+- **[📖 Full Installation Guide](INSTALL.md)** - Detailed setup for all platforms
+- **[📋 Stable Version Info](README_STABLE.md)** - Features and differences
+- **[🔧 Recent Fixes](FIXES_APPLIED.md)** - Latest improvements
+- **[🆚 Version Comparison](VERSION_INFO.md)** - Main vs Stable
 
 ## ✨ Features
 
