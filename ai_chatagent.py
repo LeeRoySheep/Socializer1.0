@@ -112,6 +112,9 @@ from tools.communication import ClarifyCommunicationTool, CulturalStandardsCheck
 # Import training system
 from training import TrainingPlanManager
 
+# Import user context builder for personalized prompts
+from services.user_context_builder import UserContextBuilder
+
 # Import extracted handlers (modularized)
 from app.agents import ResponseHandler, ToolHandler, MemoryHandler
 from app.agents.local_model_cleaner import LocalModelCleaner
@@ -528,12 +531,20 @@ class AiChatagent:
         self.memory_handler = MemoryHandler(self.memory_agent, self.conversation_tool)
         
         try:
-            # Bind all tools to LLM (works for all providers now!)
-            self.llm_with_tools = llm.bind_tools(tool_list)
-            print(f"✅ Successfully bound {len(tool_list)} tools to {provider} LLM")
+            # For local models: Use MCP JSON format instead of bind_tools
+            # bind_tools uses OpenAI function calling which many local models ignore
+            # MCP JSON format in system prompt works better for local models
+            if self.is_local_model:
+                print(f"🏠 Local model detected - using MCP JSON format for tool calls")
+                print(f"   (bind_tools skipped - local models use JSON response format)")
+                self.llm_with_tools = llm  # Use raw LLM, MCP prompt handles tools
+            else:
+                # For cloud providers: Use bind_tools (native function calling)
+                self.llm_with_tools = llm.bind_tools(tool_list)
+                print(f"✅ Successfully bound {len(tool_list)} tools to {provider} LLM")
         except Exception as e:
             print(f"⚠️  Tool binding failed: {e}")
-            print(f"   Using LLM without tools")
+            print(f"   Using LLM without tools (MCP JSON format)")
             self.llm_with_tools = llm
 
     def get_conversation_history(self) -> List[Dict[str, Any]]:
@@ -552,6 +563,23 @@ class AiChatagent:
         except Exception as e:
             print(f"Error retrieving conversation history: {e}")
             return []
+    
+    def _get_user_context(self) -> str:
+        """
+        Get comprehensive user context for system prompt.
+        
+        Uses UserContextBuilder to gather all relevant user data
+        including preferences, skills, training progress, and chat rooms.
+        
+        Returns:
+            Formatted user context string for LLM
+        """
+        try:
+            context_builder = UserContextBuilder(dm)
+            return context_builder.build_full_context(self.user)
+        except Exception as e:
+            print(f"Error building user context: {e}")
+            return ""
 
     def chatbot(self, state: State) -> dict:
         """
@@ -924,7 +952,16 @@ class AiChatagent:
             
             # Enhanced system message with social behavior training and translation
             language_status = "confirmed" if self.language_confirmed else "auto-detected (not yet confirmed)"
-            system_prompt = f"""You are an AI Social Coach and Communication Assistant for user ID: {self.user.id} (Username: {self.user.username})
+            
+            # For local models: Add MCP tool instructions at the START for better visibility
+            local_model_prefix = ""
+            if self.is_local_model:
+                local_model_prefix = LocalModelCleaner.get_local_model_system_prompt(
+                    user_language=self.user_language,
+                    available_tools=self.tools
+                ) + "\n\n---\n\n"
+            
+            system_prompt = f"""{local_model_prefix}You are an AI Social Coach and Communication Assistant for user ID: {self.user.id} (Username: {self.user.username})
 
 🌐 **USER'S PREFERRED LANGUAGE: {self.user_language}** (Status: {language_status})
 ⚠️ CRITICAL: You MUST ALWAYS respond in {self.user_language}.
@@ -945,6 +982,8 @@ class AiChatagent:
 - Always ask for language confirmation IN THE DETECTED LANGUAGE, not in English!
 
 {self.training_manager.get_training_context_for_prompt(self.user)}
+
+{self._get_user_context()}
 
 ⚠️ **CRITICAL: ALWAYS PROVIDE A RESPONSE**
 After receiving tool results, you MUST respond with helpful, informative content.
@@ -1186,12 +1225,8 @@ When user asks about:
   3. When they confirm, call `set_language_preference` tool with language="{detected_language_info['language']}"
 - IMPORTANT: The confirmation message is ALREADY in {detected_language_info['language']} - use it as-is!"""
             
-            # ✅ Add local model instructions if using local LLM
-            if self.is_local_model:
-                system_prompt += LocalModelCleaner.get_local_model_system_prompt(
-                    user_language=self.user_language,
-                    available_tools=self.tools  # Pass actual available tools
-                )
+            # Note: Local model MCP instructions are now added at the START of the prompt
+            # (see local_model_prefix above) for better visibility to the model
             
             sys_msg = SystemMessage(content=system_prompt)
             
@@ -1409,6 +1444,46 @@ When user asks about:
             # ===================================================================
             
             if self.is_local_model:
+                # Check if local model should have used tools but didn't
+                # This helps detect models that don't support function calling
+                user_query = ""
+                for msg in reversed(messages):
+                    if hasattr(msg, 'type') and msg.type == 'human':
+                        user_query = msg.content.lower() if hasattr(msg, 'content') else ""
+                        break
+                
+                # Detect query types that should use tools
+                should_use_tools = any(keyword in user_query for keyword in [
+                    'weather', 'temperature', 'forecast',  # Weather queries
+                    'news', 'latest', 'current',  # News/search queries
+                    'search', 'find', 'look up',  # Explicit search
+                    'remember', 'recall', 'last time',  # Memory queries
+                ])
+                
+                has_tool_calls = hasattr(response, 'tool_calls') and response.tool_calls
+                
+                if should_use_tools and not has_tool_calls:
+                    # Check if model supports function calling
+                    model_name = getattr(self.llm, 'model_name', getattr(self.llm, 'model', ''))
+                    supports_fc = LocalModelCleaner.is_function_calling_model(model_name)
+                    
+                    if not supports_fc:
+                        print(f"\n⚠️  WARNING: Local model '{model_name}' did not use tools")
+                        print(f"   Query type suggests tools should be used: {user_query[:50]}...")
+                        print(f"   Model may not support function calling.")
+                        print(f"   Recommended models: Llama 3.1+, Mistral Instruct, Qwen 2.5")
+                        
+                        # Log warning for observability
+                        self.ote_logger.logger.warning(
+                            f"Local model may not support function calling",
+                            extra={
+                                'request_id': self.current_request_id,
+                                'model': model_name,
+                                'query_type': 'tool_expected',
+                                'event_type': 'local_model_no_tools'
+                            }
+                        )
+                
                 # Clean model artifacts and format raw output from local LLMs
                 # Returns (cleaned_response, parsed_tool_calls)
                 response, parsed_tool_calls = LocalModelCleaner.process_response(
@@ -1605,9 +1680,24 @@ When user asks about:
                             # Use LLM without tools to generate natural response
                             interpreted = self.llm.invoke(interpret_messages)
                             
-                            # Append tool calls at bottom for observability
+                            # Extract content and clean it
                             content = interpreted.content if hasattr(interpreted, 'content') else str(interpreted)
                             content = LocalModelCleaner.clean_response(content)
+                            
+                            # For local models: Extract formatted_output from JSON if present
+                            if self.is_local_model and (content.strip().startswith('{') or '"formatted_output"' in content):
+                                try:
+                                    parsed = json.loads(content)
+                                    if isinstance(parsed, dict) and parsed.get('formatted_output'):
+                                        content = parsed['formatted_output']
+                                        print(f"   ✅ Extracted formatted_output from JSON response")
+                                except json.JSONDecodeError:
+                                    # Try to extract just the formatted_output value
+                                    import re
+                                    match = re.search(r'"formatted_output"\s*:\s*"([^"]+)"', content)
+                                    if match:
+                                        content = match.group(1)
+                                        print(f"   ✅ Extracted formatted_output via regex")
                             
                             # Add observability section
                             tools_summary = "\n".join([

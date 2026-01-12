@@ -193,17 +193,18 @@ class LocalModelCleaner:
                         formatted = parsed.get('formatted_output')
                         tool_calls = parsed.get('tool_calls', [])
                         
-                        # If formatted_output has content, return it as final response
-                        if formatted and isinstance(formatted, str) and len(formatted) > 5:
-                            logger.info(f"✅ Found formatted_output: {formatted[:50]}...")
-                            return None, formatted
-                        
-                        # If formatted_output is null/None, extract tool calls
+                        # PRIORITY: If tool_calls exist, execute them first (even if formatted_output exists)
+                        # This ensures tools are called for weather/search queries
                         if tool_calls and isinstance(tool_calls, list):
                             valid_calls = [tc for tc in tool_calls if isinstance(tc, dict) and 'name' in tc]
                             if valid_calls:
-                                logger.info(f"🔧 Parsed {len(valid_calls)} tool calls (formatted_output=null)")
+                                logger.info(f"🔧 Parsed {len(valid_calls)} tool calls from MCP JSON")
                                 return valid_calls, None
+                        
+                        # Only use formatted_output if NO tool calls
+                        if formatted and isinstance(formatted, str) and len(formatted) > 5:
+                            logger.info(f"✅ Found formatted_output (no tools): {formatted[:50]}...")
+                            return None, formatted
             except (json.JSONDecodeError, Exception) as e:
                 logger.debug(f"Structured JSON parse failed: {e}")
         
@@ -288,70 +289,26 @@ class LocalModelCleaner:
         tools_doc = cls._format_mcp_tools(tools)
         
         return f"""
-## MCP PROTOCOL - SOCIAL SKILLS COACHING
 
-### YOUR ROLE:
-You are a **Social Skills Coach** - warm, empathetic, and supportive. 
-ALWAYS be in coaching mode - help users improve their communication skills in every interaction.
+⚠️⚠️⚠️ MANDATORY TOOL USAGE - READ CAREFULLY ⚠️⚠️⚠️
 
-### TOOL USAGE GUIDELINES:
+You MUST use tools for real-time information. NEVER answer directly without tools for:
+- Weather → MUST call web_search
+- News → MUST call web_search  
+- Current events → MUST call web_search
+- Previous conversations → MUST call recall_last_conversation
 
-**LANGUAGE DETECTION (CHECK FIRST!):**
-If user writes in a DIFFERENT language than "{user_language}":
-→ Call `set_language_preference` with the detected language
-→ Example: User says "Hello" but {user_language} is not English → use set_language_preference(language="English", confirmed=true)
+AVAILABLE TOOLS: {', '.join([t.get('name', '') for t in tools])}
 
-**AUTOMATIC:**
-- `skill_evaluator`: System calls every 5th message
-- `clarify_communication`: When message is unclear
+JSON RESPONSE FORMAT:
 
-**ON REQUEST:**
-- `web_search`: For information (weather, news)
-- `recall_last_conversation`: For previous conversations  
-- `user_preference`: For settings
-- `life_event`: For important events
+Tool call (for weather/news/search):
+{{"formatted_output": null, "tool_calls": [{{"name": "web_search", "arguments": {{"query": "current weather Berlin"}}}}]}}
 
-**GREETINGS (if language matches):**
-- Respond directly, NO tools needed
+Direct response (ONLY for greetings/simple questions):
+{{"formatted_output": "Your response in {user_language}", "tool_calls": []}}
 
-### RESPONSE FORMAT:
-
-**Direct response (greetings, simple questions):**
-```json
-{{"formatted_output": "Your coaching response in {user_language}", "tool_calls": []}}
-```
-
-**Tool call needed:**
-```json
-{{"formatted_output": null, "tool_calls": [{{"name": "tool_name", "arguments": {{...}}}}]}}
-```
-
-### AVAILABLE TOOLS:
-{tools_doc}
-
-### EXAMPLES:
-
-Greeting (direct coaching response):
-```json
-{{"formatted_output": "Hallo! Schön, dass du da bist! Wie kann ich dir heute bei deiner sozialen Entwicklung helfen?", "tool_calls": []}}
-```
-
-User message unclear (use clarify_communication):
-```json
-{{"formatted_output": null, "tool_calls": [{{"name": "clarify_communication", "arguments": {{"text": "user's unclear message", "target_language": "{user_language}"}}}}]}}
-```
-
-Information request (use web_search):
-```json
-{{"formatted_output": null, "tool_calls": [{{"name": "web_search", "arguments": {{"query": "weather in Berlin"}}}}]}}
-```
-
-### RULES:
-1. ALWAYS maintain coaching tone - be encouraging and supportive
-2. For greetings: respond directly with warmth
-3. Use `clarify_communication` if user's message needs clarification
-4. ONLY use tool names from the list above
-5. Respond in **{user_language}**
+⚠️ NEVER give weather/news answers without calling web_search first!
 """
     
     @classmethod
@@ -722,6 +679,108 @@ Information request (use web_search):
         
         return response, None
     
+    @classmethod
+    def check_tool_support(cls, response: Any, query_type: str = "general") -> Dict[str, Any]:
+        """
+        Check if a local model response indicates proper tool support.
+        
+        This method analyzes the response to determine if the local model
+        actually used function calling or just generated a direct response.
+        
+        Args:
+            response: The LLM response to analyze
+            query_type: Type of query ("weather", "search", "memory", "general")
+            
+        Returns:
+            Dict with:
+                - tools_used: bool - Whether tools were actually called
+                - likely_hallucination: bool - Whether response may be hallucinated
+                - recommendation: str - Suggested action
+        """
+        result = {
+            "tools_used": False,
+            "likely_hallucination": False,
+            "recommendation": None
+        }
+        
+        # Check if response has tool_calls
+        if hasattr(response, 'tool_calls') and response.tool_calls:
+            result["tools_used"] = True
+            return result
+        
+        # No tool calls - analyze content for hallucination indicators
+        content = response.content if hasattr(response, 'content') else str(response)
+        content_lower = content.lower()
+        
+        # Weather queries without tool calls are likely hallucinated
+        if query_type == "weather" or "weather" in content_lower or "temperature" in content_lower:
+            # Check for specific weather data patterns that suggest real data
+            has_specific_data = bool(re.search(r'\d+\s*°[CF]', content))
+            has_source = bool(re.search(r'(according to|based on|from)', content_lower))
+            
+            if not has_source and has_specific_data:
+                result["likely_hallucination"] = True
+                result["recommendation"] = (
+                    "⚠️ Local model may have hallucinated weather data. "
+                    "For accurate weather, use a model with function calling support "
+                    "(Llama 3.1+, Mistral Instruct, Qwen 2.5) or switch to GPT/Gemini."
+                )
+        
+        # Search queries without tool calls
+        if query_type == "search" or any(word in content_lower for word in ["search", "found", "results"]):
+            if not result["tools_used"]:
+                result["likely_hallucination"] = True
+                result["recommendation"] = (
+                    "⚠️ Local model did not use web search. "
+                    "Information may be outdated or inaccurate."
+                )
+        
+        return result
+    
+    @classmethod
+    def get_function_calling_models(cls) -> List[str]:
+        """
+        Get list of local models known to support function calling.
+        
+        Returns:
+            List of model name patterns that support function calling
+        """
+        return [
+            "llama-3.1",
+            "llama-3.2", 
+            "llama3.1",
+            "llama3.2",
+            "mistral-instruct",
+            "mistral-7b-instruct",
+            "qwen2.5",
+            "qwen-2.5",
+            "hermes-2-pro",
+            "functionary",
+            "gorilla",
+            "nexusraven",
+            "firefunction",
+        ]
+    
+    @classmethod
+    def is_function_calling_model(cls, model_name: str) -> bool:
+        """
+        Check if a model name indicates function calling support.
+        
+        Args:
+            model_name: Name of the model
+            
+        Returns:
+            bool: True if model likely supports function calling
+        """
+        if not model_name:
+            return False
+            
+        model_lower = model_name.lower()
+        for pattern in cls.get_function_calling_models():
+            if pattern in model_lower:
+                return True
+        return False
+
     @classmethod
     def extract_weather_info(cls, content: str) -> Optional[str]:
         """

@@ -1062,33 +1062,6 @@
                 </div>
             </div>
             <div class="right-section">
-                <!-- LLM Model Switcher -->
-                <div class="llm-switcher-container">
-                    <select id="llm-model-selector" class="llm-model-selector" title="Select AI Model">
-                        <optgroup label="☁️ OpenAI Models">
-                            <option value="gpt-4o-mini" selected>GPT-4o Mini ⚡ RECOMMENDED</option>
-                            <option value="gpt-4.1-mini">GPT-4.1 Mini (Better Reasoning)</option>
-                            <option value="gpt-5-mini">GPT-5 Mini (Latest)</option>
-                            <option value="gpt-3.5-turbo">GPT-3.5 Turbo (Fast)</option>
-                        </optgroup>
-                        <optgroup label="☁️ OpenAI Premium">
-                            <option value="gpt-4o">GPT-4o 💰 (Most Capable)</option>
-                            <option value="gpt-4-turbo">GPT-4 Turbo 💰 (Powerful)</option>
-                        </optgroup>
-                        <optgroup label="🌟 Google Gemini">
-                            <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (FREE! All Tools)</option>
-                        </optgroup>
-                        <optgroup label="🤖 Anthropic Claude">
-                            <option value="claude-sonnet-4-0">Claude 4.0 Sonnet (Latest)</option>
-                        </optgroup>
-                        <optgroup label="💻 Local Models">
-                            <option value="lm-studio-local">LM Studio (Local)</option>
-                            <option value="ollama-local">Ollama (Local)</option>
-                        </optgroup>
-                    </select>
-                    <i class="bi bi-cpu model-icon"></i>
-                </div>
-                
                 <button id="private-chat-btn" class="private-chat-btn">
                     <i class="bi bi-plus-lg"></i>
                     Private Chat
@@ -1183,9 +1156,28 @@
                         <input type="text" id="message-input" placeholder="Type your message... (use /ai for AI assistant)" autocomplete="off">
                     </div>
                     <div class="send-controls">
-                        <button type="button" id="llm-config-toggle" class="ai-toggle" title="Configure Local LLM" data-bs-toggle="modal" data-bs-target="#llmConfigModal">
-                            <i class="bi bi-cpu"></i>
-                            <span class="ai-toggle-text">LLM</span>
+                        <!-- LLM Model Selector (compact) -->
+                        <select id="llm-model-selector" class="llm-model-selector-compact" title="Select AI Model">
+                            <optgroup label="☁️ OpenAI">
+                                <option value="gpt-4o-mini" selected>GPT-4o Mini ⚡</option>
+                                <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+                                <option value="gpt-5-mini">GPT-5 Mini 🆕</option>
+                                <option value="gpt-4o">GPT-4o 💰</option>
+                            </optgroup>
+                            <optgroup label="🌟 Gemini">
+                                <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (FREE)</option>
+                            </optgroup>
+                            <optgroup label="🤖 Claude">
+                                <option value="claude-sonnet-4-0">Claude 4.0 Sonnet</option>
+                            </optgroup>
+                            <optgroup label="💻 Local">
+                                <option value="lm-studio-local">LM Studio</option>
+                                <option value="ollama-local">Ollama</option>
+                            </optgroup>
+                        </select>
+                        <!-- LLM Config Button -->
+                        <button type="button" id="llm-config-toggle" class="ai-toggle" title="Configure LLM Settings" data-bs-toggle="modal" data-bs-target="#llmConfigModal">
+                            <i class="bi bi-gear"></i>
                         </button>
                         <button type="button" id="ai-toggle" class="ai-toggle" title="Toggle AI Passive Listening">
                             <i class="bi bi-robot"></i>
@@ -1301,91 +1293,127 @@
 
     <!-- LLM Configuration Modal -->
     <div class="modal fade" id="llmConfigModal" tabindex="-1" aria-labelledby="llmConfigModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="llmConfigModalLabel">
-                        <i class="bi bi-cpu"></i> Local LLM Configuration
+                        <i class="bi bi-cpu"></i> AI Provider Configuration
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="alert alert-info">
-                        <i class="bi bi-info-circle"></i>
-                        <strong>Configure your local LLM server</strong><br>
-                        <small>Enter the IP address and port of your local LLM server (LM Studio, Ollama, etc.)</small>
-                    </div>
-                    
                     <form id="llm-config-form">
                         <!-- Provider Selection -->
                         <div class="mb-3">
                             <label for="llm-provider" class="form-label">
-                                <i class="bi bi-server"></i> Provider
+                                <i class="bi bi-server"></i> <strong>Select AI Provider</strong>
                             </label>
-                            <select class="form-select" id="llm-provider" required>
-                                <option value="">Select provider...</option>
-                                <option value="lm_studio">LM Studio (local)</option>
-                                <option value="ollama">Ollama (local)</option>
-                                <option value="openai">OpenAI (cloud)</option>
-                                <option value="gemini">Google Gemini (cloud)</option>
-                                <option value="claude">Anthropic Claude (cloud)</option>
+                            <select class="form-select form-select-lg" id="llm-provider" required>
+                                <option value="">Choose a provider...</option>
+                                <optgroup label="☁️ Cloud Providers (API Key Required)">
+                                    <option value="openai">OpenAI (GPT-4o, GPT-4)</option>
+                                    <option value="gemini">Google Gemini (FREE tier available!)</option>
+                                    <option value="claude">Anthropic Claude</option>
+                                </optgroup>
+                                <optgroup label="💻 Local Providers (FREE - No API Key)">
+                                    <option value="lm_studio">LM Studio (Local)</option>
+                                    <option value="ollama">Ollama (Local)</option>
+                                </optgroup>
                             </select>
-                            <div class="form-text">Choose your LLM provider</div>
                         </div>
 
-                        <!-- IP Address -->
-                        <div class="mb-3">
-                            <label for="llm-ip" class="form-label">
-                                <i class="bi bi-hdd-network"></i> IP Address
-                            </label>
-                            <input 
-                                type="text" 
-                                class="form-control" 
-                                id="llm-ip" 
-                                placeholder="192.168.1.100 or localhost"
-                                required
-                            >
-                            <div class="form-text">Enter server IP or hostname</div>
+                        <!-- Provider Info Card (dynamically updated) -->
+                        <div id="provider-info-card" class="card mb-3" style="display: none;">
+                            <div class="card-body">
+                                <h6 class="card-title" id="provider-display-name">Provider</h6>
+                                <p class="card-text small" id="provider-description">Description</p>
+                                <div id="provider-links" class="d-flex gap-2 flex-wrap">
+                                    <!-- Registration/pricing links added dynamically -->
+                                </div>
+                            </div>
                         </div>
 
-                        <!-- Port -->
-                        <div class="mb-3">
-                            <label for="llm-port" class="form-label">
-                                <i class="bi bi-ethernet"></i> Port
-                            </label>
-                            <input 
-                                type="number" 
-                                class="form-control" 
-                                id="llm-port" 
-                                placeholder="1234"
-                                min="1"
-                                max="65535"
-                                required
-                            >
-                            <div class="form-text">Default: LM Studio (1234), Ollama (11434)</div>
-                        </div>
-
-                        <!-- Model Name -->
-                        <div class="mb-3">
-                            <label for="llm-model" class="form-label">
-                                <i class="bi bi-box"></i> Model Name
-                            </label>
-                            <input 
-                                type="text" 
-                                class="form-control" 
-                                id="llm-model" 
-                                placeholder="llama-3.2 or local-model"
-                            >
-                            <div class="form-text">Model identifier (optional for some providers)</div>
-                        </div>
-
-                        <!-- Preview -->
-                        <div class="mb-3">
+                        <!-- API Key Section (for cloud providers) -->
+                        <div id="api-key-section" class="mb-3" style="display: none;">
                             <label class="form-label">
-                                <i class="bi bi-link-45deg"></i> Endpoint Preview
+                                <i class="bi bi-key"></i> <strong>API Key</strong>
                             </label>
-                            <div class="alert alert-secondary mb-0">
-                                <code id="endpoint-preview">http://localhost:1234</code>
+                            
+                            <!-- API Key Mode Toggle -->
+                            <div class="btn-group w-100 mb-2" role="group" aria-label="API Key Mode">
+                                <input type="radio" class="btn-check" name="api-key-mode" id="api-key-public" value="public" checked>
+                                <label class="btn btn-outline-success" for="api-key-public">
+                                    <i class="bi bi-globe"></i> Use Public Key (from .env)
+                                </label>
+                                <input type="radio" class="btn-check" name="api-key-mode" id="api-key-private" value="private">
+                                <label class="btn btn-outline-primary" for="api-key-private">
+                                    <i class="bi bi-person-lock"></i> Use My Private Key
+                                </label>
+                            </div>
+                            
+                            <!-- Public Key Status -->
+                            <div id="public-key-status" class="alert alert-success small py-2">
+                                <i class="bi bi-check-circle"></i> Public API key available - no configuration needed
+                            </div>
+                            
+                            <!-- Private Key Input -->
+                            <div id="private-key-input" style="display: none;">
+                                <input 
+                                    type="password" 
+                                    class="form-control" 
+                                    id="llm-api-key" 
+                                    placeholder="Enter your API key (sk-...)"
+                                >
+                                <div class="form-text">
+                                    Your key is stored securely and never shared.
+                                    <a href="#" id="get-api-key-link" target="_blank">Get an API key →</a>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Local LLM Settings (for local providers) -->
+                        <div id="local-llm-section" style="display: none;">
+                            <div class="alert alert-info small">
+                                <i class="bi bi-info-circle"></i>
+                                <strong>Local LLM detected!</strong> Standard settings will be used automatically.
+                            </div>
+                            
+                            <!-- Optional: Custom IP (collapsed by default) -->
+                            <div class="mb-3">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="use-custom-endpoint">
+                                    <label class="form-check-label" for="use-custom-endpoint">
+                                        Use custom server address (advanced)
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <div id="custom-endpoint-fields" style="display: none;">
+                                <div class="row">
+                                    <div class="col-8">
+                                        <label for="llm-ip" class="form-label small">IP Address</label>
+                                        <input type="text" class="form-control" id="llm-ip" placeholder="localhost">
+                                    </div>
+                                    <div class="col-4">
+                                        <label for="llm-port" class="form-label small">Port</label>
+                                        <input type="number" class="form-control" id="llm-port" placeholder="1234">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Health Check Status (automatic) -->
+                        <div id="health-check-section" class="mb-3" style="display: none;">
+                            <div id="health-status"></div>
+                        </div>
+
+                        <!-- Endpoint Preview -->
+                        <div class="mb-3">
+                            <label class="form-label small text-muted">
+                                <i class="bi bi-link-45deg"></i> Configuration Preview
+                            </label>
+                            <div class="alert alert-secondary py-2 mb-0">
+                                <code id="endpoint-preview">Select a provider to see configuration</code>
                             </div>
                         </div>
 
@@ -1395,11 +1423,11 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-danger" id="clear-llm-config-btn">
-                        <i class="bi bi-trash"></i> Clear Config
+                        <i class="bi bi-trash"></i> Reset to Default
                     </button>
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                     <button type="button" class="btn btn-primary" id="save-llm-config-btn">
-                        <i class="bi bi-check-lg"></i> Save Configuration
+                        <i class="bi bi-check-lg"></i> Save & Apply
                     </button>
                 </div>
             </div>
@@ -1580,6 +1608,36 @@
     </script>
     
     <style>
+        /* Compact LLM Model Selector in Send Area */
+        .llm-model-selector-compact {
+            padding: 0.4rem 0.6rem;
+            font-size: 0.8rem;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: linear-gradient(135deg, #2d3748, #1a202c);
+            color: white;
+            cursor: pointer;
+            max-width: 140px;
+            transition: all 0.2s ease;
+        }
+        .llm-model-selector-compact:hover {
+            border-color: #48c6ef;
+            box-shadow: 0 0 8px rgba(72, 198, 239, 0.3);
+        }
+        .llm-model-selector-compact:focus {
+            outline: none;
+            border-color: #48c6ef;
+        }
+        .llm-model-selector-compact option {
+            background: #1a202c;
+            color: white;
+        }
+        .llm-model-selector-compact optgroup {
+            background: #2d3748;
+            color: #a0aec0;
+            font-weight: bold;
+        }
+        
         @keyframes slideIn {
             from {
                 transform: translateX(400px);
@@ -1603,6 +1661,7 @@
         }
     </style>
     
+    <script src="/static/js/llm-config.js"></script>
     <script src="/static/js/chat.js" type="module"></script>
 </body>
 </html>

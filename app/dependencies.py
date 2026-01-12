@@ -25,13 +25,14 @@ def get_db() -> Generator[Session, None, None]:
 
 async def get_current_user(
     request: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme)
 ) -> User:
     """
     Dependency to get the current user from the JWT token.
     
     ✅ Now uses TokenManager for secure, multi-method auth:
-    - Checks Authorization header
+    - Checks Authorization header (Swagger compatible via oauth2_scheme)
     - Checks query parameter (?token=xxx)
     - Checks cookies
     

@@ -5,17 +5,21 @@ Provides REST API endpoints for testing and integrating with the AI system.
 All endpoints require authentication.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
+from openai import APIConnectionError, APITimeoutError
 
 from app.dependencies import get_current_user
 from app.database import get_db
-from datamanager.data_model import User
+from datamanager.data_model import User, TrainingSchedule, Skill, Training
 from ai_chatagent import AiChatagent, llm, dm
 from app.ote_logger import get_logger
 from app.schemas import LLMConfigCreate, LLMConfigResponse
 from training import TrainingPlanManager
+from training.training_schedule_service import TrainingScheduleService, BASIC_SKILLS
+from services.llm_provider_config import llm_provider_config, LLMProviderType
 
 # Initialize training manager
 training_manager = TrainingPlanManager(dm)
@@ -432,6 +436,32 @@ async def chat_with_ai(
             }
         )
         
+    except (APIConnectionError, APITimeoutError) as e:
+        # Specific handling for local LLM gateway connection issues
+        error_msg = str(e)
+        ote_logger.logger.error(f"LLM Connection error: {e}", exc_info=True)
+        
+        # Check if this is a local model connection issue
+        is_local_model = any(x in error_msg.lower() for x in ['localhost', '127.0.0.1', '192.168', 'connection refused', 'connect'])
+        
+        if is_local_model or 'lm_studio' in str(provider).lower() or 'ollama' in str(provider).lower():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "⚠️ Local LLM Gateway Connection Failed!\n\n"
+                    "Please check the following:\n"
+                    "1. Is your local LLM server (LM Studio/Ollama) running?\n"
+                    "2. Is the gateway URL set correctly in frontend settings?\n"
+                    "3. For LM Studio: Default is http://localhost:1234\n"
+                    "4. For Ollama: Default is http://localhost:11434\n\n"
+                    f"Technical details: {error_msg}"
+                )
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"LLM service connection failed: {error_msg}"
+            )
     except Exception as e:
         ote_logger.logger.error(f"Chat error: {e}", exc_info=True)
         raise HTTPException(
@@ -725,6 +755,96 @@ async def get_llm_config(
         )
 
 
+@router.get(
+    "/llm-providers",
+    summary="Get Available LLM Providers",
+    description="Get all available LLM providers with their default configurations and registration links",
+)
+async def get_llm_providers():
+    """
+    Get all available LLM providers with their configurations.
+    
+    Returns provider defaults, API key availability, and registration links.
+    """
+    return {
+        "providers": llm_provider_config.get_all_providers(),
+        "local_providers": ["lm_studio", "ollama"],
+        "cloud_providers": ["openai", "gemini", "claude"]
+    }
+
+
+@router.get(
+    "/llm-health",
+    summary="Check Local LLM Health",
+    description="Check if a local LLM server is running and accessible",
+)
+async def check_llm_health(
+    provider: str,
+    ip: Optional[str] = None,
+    port: Optional[int] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Check if a local LLM server is running and accessible.
+    
+    **Query Parameters:**
+    - `provider`: LLM provider (lm_studio, ollama)
+    - `ip`: Server IP address (default: localhost)
+    - `port`: Server port (default: provider-specific)
+    
+    **Example:**
+    ```
+    GET /api/ai/llm-health?provider=lm_studio&ip=localhost&port=1234
+    ```
+    
+    **Response:**
+    ```json
+    {
+        "healthy": true,
+        "status": "online",
+        "message": "LM Studio is running",
+        "endpoint": "http://localhost:1234",
+        "models_available": ["llama-3.2", "mistral"]
+    }
+    ```
+    """
+    result = await llm_provider_config.check_local_llm_health(provider, ip, port)
+    return result
+
+
+@router.get(
+    "/llm-provider-defaults/{provider}",
+    summary="Get Provider Defaults",
+    description="Get default configuration values for a specific LLM provider",
+)
+async def get_provider_defaults(provider: str):
+    """
+    Get default configuration for a specific provider.
+    
+    Returns standard endpoint, port, model, and registration links.
+    """
+    defaults = llm_provider_config.get_provider_defaults(provider)
+    if not defaults:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown provider: {provider}"
+        )
+    
+    return {
+        "name": defaults.name,
+        "display_name": defaults.display_name,
+        "is_local": defaults.is_local,
+        "default_endpoint": defaults.default_endpoint,
+        "default_port": defaults.default_port,
+        "default_model": defaults.default_model,
+        "requires_api_key": defaults.requires_api_key,
+        "has_public_key": bool(llm_provider_config.get_public_api_key(provider)),
+        "registration_url": defaults.registration_url,
+        "pricing_url": defaults.pricing_url,
+        "description": defaults.description
+    }
+
+
 @router.post(
     "/llm-config",
     response_model=LLMConfigResponse,
@@ -856,4 +976,347 @@ async def delete_llm_config(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error clearing LLM configuration: {str(e)}"
+        )
+
+
+# =============================================================================
+# TRAINING SCHEDULE ENDPOINTS
+# =============================================================================
+
+class ScheduleUpdateRequest(BaseModel):
+    """Request model for updating training schedule preferences."""
+    preferred_days: Optional[List[int]] = Field(
+        None,
+        description="List of preferred training days (0=Monday, 6=Sunday)",
+        example=[0, 2, 4]
+    )
+    frequency: Optional[str] = Field(
+        None,
+        description="Training frequency: 'daily', 'every_other_day', 'weekly'",
+        example="daily"
+    )
+
+
+class SchedulePauseRequest(BaseModel):
+    """Request model for pausing a training schedule."""
+    days: int = Field(
+        7,
+        description="Number of days to pause (max 14 for basic trainings)",
+        ge=1,
+        le=14,
+        example=7
+    )
+
+
+@router.get(
+    "/training/schedules",
+    summary="Get User's Training Schedules",
+    description="Get all training schedules for the authenticated user, including pause status and preferences.",
+    responses={
+        200: {"description": "List of training schedules"},
+        401: {"description": "Not authenticated"}
+    }
+)
+async def get_training_schedules(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Get all training schedules for the current user.
+    
+    Returns a list of all training schedules with their current status,
+    including whether they are active, paused, or due for training today.
+    
+    **Example Response:**
+    ```json
+    {
+        "schedules": [
+            {
+                "skill_name": "empathy",
+                "is_basic": true,
+                "is_active": true,
+                "frequency": "daily",
+                "preferred_days": [0, 1, 2, 3, 4, 5, 6],
+                "should_train_today": true
+            }
+        ],
+        "todays_trainings": ["empathy", "active_listening"]
+    }
+    ```
+    """
+    try:
+        service = TrainingScheduleService(db)
+        
+        # Check and reactivate any expired pauses
+        reactivated = service.check_and_reactivate_expired_pauses(current_user.id)
+        if reactivated:
+            ote_logger.logger.info(
+                f"Auto-reactivated {len(reactivated)} schedules for user {current_user.id}"
+            )
+        
+        # Get all schedules
+        schedules = service.get_user_schedules(current_user.id)
+        
+        # Get today's trainings
+        todays_trainings = service.get_todays_trainings(current_user.id)
+        
+        # Format response
+        schedule_list = []
+        for schedule in schedules:
+            skill = db.query(Skill).filter(Skill.id == schedule.skill_id).first()
+            schedule_list.append({
+                "id": schedule.id,
+                "skill_id": schedule.skill_id,
+                "skill_name": skill.skill_name if skill else "Unknown",
+                "is_basic": schedule.is_basic,
+                "is_active": schedule.is_active,
+                "paused_at": schedule.paused_at.isoformat() if schedule.paused_at else None,
+                "pause_until": schedule.pause_until.isoformat() if schedule.pause_until else None,
+                "frequency": schedule.frequency,
+                "preferred_days": schedule.preferred_days,
+                "last_trained_at": schedule.last_trained_at.isoformat() if schedule.last_trained_at else None,
+                "should_train_today": schedule.should_train_today()
+            })
+        
+        return {
+            "schedules": schedule_list,
+            "todays_trainings": [t["skill_name"] for t in todays_trainings],
+            "reactivated_count": len(reactivated)
+        }
+    except Exception as e:
+        ote_logger.logger.error(f"Error getting training schedules: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting training schedules: {str(e)}"
+        )
+
+
+@router.post(
+    "/training/schedules/init",
+    summary="Initialize Basic Training Schedules",
+    description="Create default schedules for basic trainings (empathy, active_listening) if they don't exist.",
+    responses={
+        200: {"description": "Schedules initialized"},
+        401: {"description": "Not authenticated"}
+    }
+)
+async def init_basic_schedules(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Initialize basic training schedules for the user.
+    
+    Creates schedules for empathy and active_listening if they don't already exist.
+    These are marked as basic trainings and cannot be permanently disabled.
+    
+    **Example Response:**
+    ```json
+    {
+        "status": "success",
+        "message": "Basic schedules initialized",
+        "schedules_created": 2
+    }
+    ```
+    """
+    try:
+        service = TrainingScheduleService(db)
+        schedules = service.create_basic_schedules_for_user(current_user.id)
+        
+        return {
+            "status": "success",
+            "message": "Basic schedules initialized",
+            "schedules_created": len(schedules),
+            "skills": [BASIC_SKILLS]
+        }
+    except Exception as e:
+        ote_logger.logger.error(f"Error initializing basic schedules: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error initializing schedules: {str(e)}"
+        )
+
+
+@router.put(
+    "/training/schedules/{skill_id}",
+    summary="Update Training Schedule",
+    description="Update preferences for a specific training schedule (days, frequency).",
+    responses={
+        200: {"description": "Schedule updated"},
+        401: {"description": "Not authenticated"},
+        404: {"description": "Schedule not found"}
+    }
+)
+async def update_training_schedule(
+    skill_id: int,
+    request: ScheduleUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Update a training schedule's preferences.
+    
+    Allows users to customize when they want to train:
+    - preferred_days: List of days (0=Monday through 6=Sunday)
+    - frequency: 'daily', 'every_other_day', or 'weekly'
+    
+    **Example Request:**
+    ```json
+    {
+        "preferred_days": [0, 2, 4],
+        "frequency": "every_other_day"
+    }
+    ```
+    """
+    try:
+        service = TrainingScheduleService(db)
+        schedule = service.get_schedule(current_user.id, skill_id)
+        
+        if not schedule:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Schedule not found for this skill"
+            )
+        
+        result = service.update_schedule_preferences(
+            schedule.id,
+            preferred_days=request.preferred_days,
+            frequency=request.frequency
+        )
+        
+        if not result["success"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=result["message"]
+            )
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        ote_logger.logger.error(f"Error updating schedule: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating schedule: {str(e)}"
+        )
+
+
+@router.post(
+    "/training/schedules/{skill_id}/pause",
+    summary="Pause Training Schedule",
+    description="Pause a training schedule for a specified number of days (max 14 for basic trainings).",
+    responses={
+        200: {"description": "Schedule paused"},
+        401: {"description": "Not authenticated"},
+        404: {"description": "Schedule not found"}
+    }
+)
+async def pause_training_schedule(
+    skill_id: int,
+    request: SchedulePauseRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Pause a training schedule.
+    
+    For basic trainings (empathy, active_listening), the maximum pause
+    duration is 14 days. After this period, the training will automatically
+    reactivate.
+    
+    **Example Request:**
+    ```json
+    {
+        "days": 7
+    }
+    ```
+    
+    **Example Response:**
+    ```json
+    {
+        "success": true,
+        "message": "Training paused for 7 days",
+        "pause_until": "2024-12-23T15:00:00"
+    }
+    ```
+    """
+    try:
+        service = TrainingScheduleService(db)
+        result = service.pause_schedule_by_skill(
+            current_user.id,
+            skill_id,
+            days=request.days
+        )
+        
+        if not result["success"]:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=result["message"]
+            )
+        
+        ote_logger.logger.info(
+            f"User {current_user.id} paused training for skill {skill_id} for {request.days} days"
+        )
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        ote_logger.logger.error(f"Error pausing schedule: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error pausing schedule: {str(e)}"
+        )
+
+
+@router.post(
+    "/training/schedules/{skill_id}/resume",
+    summary="Resume Training Schedule",
+    description="Resume a paused training schedule immediately.",
+    responses={
+        200: {"description": "Schedule resumed"},
+        401: {"description": "Not authenticated"},
+        404: {"description": "Schedule not found"}
+    }
+)
+async def resume_training_schedule(
+    skill_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Resume a paused training schedule.
+    
+    Immediately reactivates a paused training schedule.
+    
+    **Example Response:**
+    ```json
+    {
+        "success": true,
+        "message": "Training resumed"
+    }
+    ```
+    """
+    try:
+        service = TrainingScheduleService(db)
+        result = service.resume_schedule_by_skill(current_user.id, skill_id)
+        
+        if not result["success"]:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=result["message"]
+            )
+        
+        ote_logger.logger.info(
+            f"User {current_user.id} resumed training for skill {skill_id}"
+        )
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        ote_logger.logger.error(f"Error resuming schedule: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error resuming schedule: {str(e)}"
         )

@@ -248,6 +248,26 @@ class ErrorLog(Base):
 
 
 class Training(Base):
+    """
+    Training record linking a user to a skill they are training.
+    
+    Tracks the progress of a user's training on a specific skill,
+    including status, progress percentage, and timestamps.
+    
+    Attributes:
+        user_id: Foreign key to users table (composite primary key)
+        skill_id: Foreign key to skills table (composite primary key)
+        status: Training status ('pending', 'active', 'paused', 'completed')
+        progress: Progress as float 0.0-1.0 (0-100%)
+        started_at: Date training was started
+        completed_at: Date training was completed (if applicable)
+        notes: Optional notes about the training
+        
+    Relationships:
+        - Belongs to User (via user_id)
+        - Belongs to Skill (via skill_id)
+        - Has one TrainingSchedule (optional)
+    """
     __tablename__ = "training"
 
     user_id: Mapped[int] = mapped_column(
@@ -294,6 +314,210 @@ class Training(Base):
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "notes": self.notes,
+        }
+
+
+class TrainingSchedule(Base):
+    """
+    User-configurable training schedule for a specific training.
+    
+    Allows users to customize when and how often they train,
+    with support for pausing (max 2 weeks) and automatic reactivation.
+    
+    Features:
+        - Configurable training days (Monday-Sunday)
+        - Preferred training time
+        - Pause functionality with 2-week maximum
+        - Automatic reactivation after pause expires
+        - Basic training always stays active (is_basic=True)
+    
+    Attributes:
+        id: Primary key
+        user_id: Foreign key to users table
+        skill_id: Foreign key to skills table
+        is_basic: If True, this is a core training that cannot be disabled
+        is_active: Whether training is currently active
+        paused_at: When training was paused (if applicable)
+        pause_until: When pause expires (max 2 weeks from paused_at)
+        preferred_days: JSON list of preferred training days (0=Mon, 6=Sun)
+        preferred_time: Preferred time of day for training reminders
+        frequency: How often to train ('daily', 'every_other_day', 'weekly')
+        last_trained_at: Last time user actively trained this skill
+        created_at: When schedule was created
+        updated_at: When schedule was last updated
+        
+    Business Rules:
+        - Basic trainings (is_basic=True) cannot be paused for more than 2 weeks
+        - After pause_until expires, training automatically reactivates
+        - Users can customize preferred_days and preferred_time
+        
+    Example:
+        >>> schedule = TrainingSchedule(
+        ...     user_id=1,
+        ...     skill_id=1,
+        ...     is_basic=True,
+        ...     preferred_days=[0, 2, 4],  # Mon, Wed, Fri
+        ...     preferred_time=datetime.time(9, 0),  # 9:00 AM
+        ...     frequency='every_other_day'
+        ... )
+    """
+    __tablename__ = "training_schedules"
+    __table_args__ = (
+        UniqueConstraint('user_id', 'skill_id', name='_user_skill_schedule_uc'),
+    )
+    
+    # Primary key
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    
+    # Foreign keys (composite reference to Training)
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False
+    )
+    skill_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("skills.id", ondelete="CASCADE"),
+        nullable=False
+    )
+    
+    # Core training flag - basic trainings always stay active
+    is_basic: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    
+    # Active/Pause state
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    paused_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    pause_until: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    
+    # Schedule preferences
+    preferred_days: Mapped[Optional[dict]] = mapped_column(
+        JSON, 
+        default=lambda: [0, 1, 2, 3, 4, 5, 6],  # All days by default
+        nullable=True
+    )
+    preferred_time: Mapped[Optional[datetime.time]] = mapped_column(
+        DateTime,  # Store as datetime, extract time
+        nullable=True
+    )
+    frequency: Mapped[str] = mapped_column(
+        String, 
+        default="daily",  # 'daily', 'every_other_day', 'weekly'
+        nullable=False
+    )
+    
+    # Tracking
+    last_trained_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        nullable=False
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+        nullable=False
+    )
+    
+    # Constants
+    MAX_PAUSE_DAYS: int = 14  # Maximum 2 weeks pause
+    
+    def __repr__(self) -> str:
+        return (
+            f"<TrainingSchedule(user_id={self.user_id}, skill_id={self.skill_id}, "
+            f"is_active={self.is_active}, is_basic={self.is_basic})>"
+        )
+    
+    def __str__(self) -> str:
+        status = "active" if self.is_active else f"paused until {self.pause_until}"
+        return f"Schedule for user {self.user_id}, skill {self.skill_id}: {status}"
+    
+    def pause(self, days: int = 7) -> bool:
+        """
+        Pause the training for specified number of days.
+        
+        Args:
+            days: Number of days to pause (max 14 for basic trainings)
+            
+        Returns:
+            True if pause was successful, False if not allowed
+            
+        Raises:
+            ValueError: If days exceeds MAX_PAUSE_DAYS for basic trainings
+        """
+        # Basic trainings can only be paused for max 2 weeks
+        if self.is_basic and days > self.MAX_PAUSE_DAYS:
+            days = self.MAX_PAUSE_DAYS
+        
+        self.is_active = False
+        self.paused_at = datetime.datetime.utcnow()
+        self.pause_until = self.paused_at + datetime.timedelta(days=days)
+        self.updated_at = datetime.datetime.utcnow()
+        
+        return True
+    
+    def resume(self) -> bool:
+        """
+        Resume a paused training.
+        
+        Returns:
+            True if resume was successful
+        """
+        self.is_active = True
+        self.paused_at = None
+        self.pause_until = None
+        self.updated_at = datetime.datetime.utcnow()
+        
+        return True
+    
+    def check_auto_reactivate(self) -> bool:
+        """
+        Check if pause has expired and auto-reactivate if needed.
+        
+        This should be called on login or periodically to ensure
+        basic trainings are reactivated after pause expires.
+        
+        Returns:
+            True if training was reactivated, False otherwise
+        """
+        if not self.is_active and self.pause_until:
+            if datetime.datetime.utcnow() >= self.pause_until:
+                self.resume()
+                return True
+        return False
+    
+    def should_train_today(self) -> bool:
+        """
+        Check if user should train this skill today based on schedule.
+        
+        Returns:
+            True if today is a training day, False otherwise
+        """
+        if not self.is_active:
+            return False
+        
+        today = datetime.date.today().weekday()  # 0=Monday, 6=Sunday
+        
+        if self.preferred_days:
+            return today in self.preferred_days
+        
+        return True  # Default: train every day
+    
+    def to_dict(self) -> dict:
+        """Convert the TrainingSchedule object to a dictionary."""
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "skill_id": self.skill_id,
+            "is_basic": self.is_basic,
+            "is_active": self.is_active,
+            "paused_at": self.paused_at.isoformat() if self.paused_at else None,
+            "pause_until": self.pause_until.isoformat() if self.pause_until else None,
+            "preferred_days": self.preferred_days,
+            "frequency": self.frequency,
+            "last_trained_at": self.last_trained_at.isoformat() if self.last_trained_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
 

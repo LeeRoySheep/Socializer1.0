@@ -1,20 +1,29 @@
 """
-Training Plan Manager - Automatic Empathy & Conversation Training
+Training Plan Manager - Adaptive Personalized Learning System
 
 LOCATION: training/training_plan_manager.py
-PURPOSE: Manage automatic training plans for users with encrypted storage
+PURPOSE: Manage automatic training plans with personalized learning adaptation
 
-FEATURES:
-    - Auto-create default empathy + conversation training plans
-    - Track progress every 5th message
-    - Generate training reminders for login
-    - Update training data on logout
-    - All data encrypted via SecureMemoryManager
+KEY FEATURES:
+    1. SUBCONSCIOUS TRAINING: Basic skills taught subtly through natural conversation
+    2. WEB RESEARCH: Fetches up-to-date best practices from internet on demand
+    3. ADAPTIVE LEARNING: Adjusts approach based on user's learning style
+    4. PERSONALIZATION: Everyone learns differently - system adapts to individual
 
-DESIGN:
-    - Uses existing Training and UserSkill database models
-    - Integrates with SecureMemoryManager for encryption
-    - Works with SkillEvaluator for skill tracking
+LEARNING STYLES SUPPORTED:
+    - Visual: Uses examples, scenarios, imagery
+    - Auditory: Explains concepts verbally, uses dialogue
+    - Kinesthetic: Hands-on practice, exercises, role-play
+    - Reading/Writing: Provides written explanations, notes
+    - Adaptive: System automatically detects best approach
+
+DESIGN PRINCIPLES:
+    - OOP: Clean separation of concerns, single responsibility
+    - Test-Driven: All features tested before deployment
+    - Documented: Comprehensive docstrings and comments
+
+AUTHOR: Socializer Development Team
+DATE: 2024-12-16
 """
 
 import json
@@ -25,29 +34,106 @@ from datamanager.data_model import User, Training, UserSkill, Skill
 from memory.secure_memory_manager import SecureMemoryManager
 from app.ote_logger import get_logger
 
+# Web search for up-to-date best practices
+try:
+    from langchain_tavily import TavilySearch
+    tavily_search = TavilySearch(max_results=5)
+    WEB_SEARCH_AVAILABLE = True
+except ImportError:
+    WEB_SEARCH_AVAILABLE = False
+    tavily_search = None
+
 logger = get_logger()
+
+
+# =============================================================================
+# LEARNING STYLE DEFINITIONS
+# =============================================================================
+
+class LearningStyle:
+    """
+    Enumeration of supported learning styles.
+    
+    Each person learns differently. This system detects and adapts to:
+    - VISUAL: Learns through seeing, examples, diagrams, scenarios
+    - AUDITORY: Learns through listening, dialogue, verbal explanations
+    - KINESTHETIC: Learns through doing, practice, role-play, exercises
+    - READING_WRITING: Learns through reading, writing, note-taking
+    - ADAPTIVE: System automatically detects and combines styles
+    
+    Attributes:
+        STYLE_PROMPTS: Dict mapping style to AI prompt instructions
+    """
+    VISUAL = "visual"
+    AUDITORY = "auditory"
+    KINESTHETIC = "kinesthetic"
+    READING_WRITING = "reading_writing"
+    ADAPTIVE = "adaptive"  # Default: system detects best approach
+    
+    # Learning style characteristics for AI prompt generation
+    STYLE_PROMPTS = {
+        "visual": (
+            "Use vivid scenarios and examples. "
+            "Paint pictures with words. "
+            "Describe situations the user can visualize."
+        ),
+        "auditory": (
+            "Explain concepts through dialogue. "
+            "Use conversational teaching style. "
+            "Ask questions and engage in discussion."
+        ),
+        "kinesthetic": (
+            "Provide hands-on exercises and practice scenarios. "
+            "Give role-play situations. "
+            "Let user practice and get feedback."
+        ),
+        "reading_writing": (
+            "Provide clear written explanations. "
+            "Offer structured information. "
+            "Give tips they can remember and apply."
+        ),
+        "adaptive": (
+            "Observe how the user responds and adapt your teaching style. "
+            "Try different approaches (examples, exercises, explanations) "
+            "and use what works best for this individual."
+        )
+    }
 
 
 class TrainingPlanManager:
     """
-    Manages automatic training plans for users.
+    Manages automatic training plans with adaptive personalized learning.
     
-    This class handles:
-    - Creating default empathy + conversation training plans
-    - Loading training plans into AI agent context
-    - Tracking message count for progress checks (every 5th message)
-    - Generating login messages with training reminders
-    - Saving progress on logout
-    - Encrypting all training data
+    This class implements a sophisticated training system that:
+    
+    1. SUBCONSCIOUS TRAINING:
+       - Basic skills (empathy, active listening) taught subtly
+       - Training feels like natural, helpful conversation
+       - No explicit "lesson" feel unless user asks for it
+    
+    2. WEB RESEARCH INTEGRATION:
+       - Fetches latest training best practices from internet
+       - Keeps training approaches up-to-date
+       - Adapts to current research findings
+    
+    3. ADAPTIVE LEARNING:
+       - Detects user's preferred learning style
+       - Adjusts teaching approach based on responses
+       - Tracks what works for each individual
+    
+    4. PERSONALIZATION:
+       - Everyone learns differently
+       - System remembers what works for each user
+       - Progress tracked and approach refined over time
     
     Attributes:
         dm: DataManager instance for database operations
-        memory_manager: SecureMemoryManager for encrypted storage
+        web_search_enabled: Whether web research is available
         
     Example:
         >>> manager = TrainingPlanManager(data_manager)
         >>> plan = manager.get_or_create_training_plan(user)
-        >>> reminder = manager.get_login_reminder(user)
+        >>> context = manager.get_training_context_for_prompt(user)
     """
     
     # Default training plan structure
@@ -404,14 +490,46 @@ class TrainingPlanManager:
                     if next_milestone:
                         context_parts.append(f"  Next milestone: {next_milestone}")
             
+            # Add learning style instructions
+            learning_style = training_data.get("learning_style", LearningStyle.ADAPTIVE)
+            style_prompt = LearningStyle.STYLE_PROMPTS.get(
+                learning_style, 
+                LearningStyle.STYLE_PROMPTS["adaptive"]
+            )
+            
             context_parts.extend([
-                "\n**YOUR TRAINING APPROACH:**",
-                "- Provide subtle examples and hints (not explicit training instructions)",
-                "- Model good empathy and conversation skills in your responses",
-                "- Gently guide user toward better communication patterns",
-                "- Make training feel like natural, helpful conversation",
-                "- Use encouraging, positive reinforcement"
+                f"\n**USER'S LEARNING STYLE: {learning_style.upper()}**",
+                f"Teaching approach: {style_prompt}",
+                "\n**SUBCONSCIOUS TRAINING (Default Mode):**",
+                "- Basic training happens SUBTLY through natural conversation",
+                "- DO NOT explicitly say 'I'm training you' or 'This is a lesson'",
+                "- Model good empathy and communication in YOUR responses",
+                "- Weave learning moments naturally into helpful conversation",
+                "- The user should feel helped, not lectured",
+                "\n**EXPLICIT TRAINING (When User Asks):**",
+                "- When user EXPLICITLY asks for training (e.g., 'teach me', 'help me practice'):",
+                "  * Then provide ACTIVE, DIRECT training with exercises",
+                "  * Give specific scenarios adapted to their learning style",
+                "  * Offer feedback on their responses",
+                "  * Make it interactive and engaging",
+                "\n**ADAPTIVE PERSONALIZATION:**",
+                "- Everyone learns differently - observe what works for THIS user",
+                "- If they respond well to examples, use more examples",
+                "- If they prefer practice, give more exercises",
+                "- Adjust your approach based on their engagement",
+                "- Track progress using the skill_evaluator tool"
             ])
+            
+            # Add best practices if available
+            for training_key, training_info in training_data["trainings"].items():
+                if training_info.get("latest_best_practices"):
+                    practices = training_info["latest_best_practices"]
+                    context_parts.append(
+                        f"\n**Latest Research for {training_info['skill_name']}:**"
+                    )
+                    context_parts.append(
+                        f"(Updated: {practices.get('fetched_at', 'N/A')[:10]})"
+                    )
             
             return "\n".join(context_parts)
             
@@ -511,5 +629,242 @@ class TrainingPlanManager:
         return {
             "trainings": {},
             "message_count": 0,
-            "last_progress_check": None
+            "last_progress_check": None,
+            "learning_style": LearningStyle.ADAPTIVE,
+            "best_practices_updated": None
         }
+    
+    # =========================================================================
+    # WEB RESEARCH FOR UP-TO-DATE BEST PRACTICES
+    # =========================================================================
+    
+    def fetch_latest_best_practices(self, skill_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch latest training best practices from web research.
+        
+        Uses Tavily search to find current research and best practices
+        for teaching specific social skills. Results are cached in the
+        training plan to avoid repeated searches.
+        
+        Args:
+            skill_name: Name of skill to research (e.g., 'empathy')
+            
+        Returns:
+            Dictionary with research findings or None if unavailable
+            
+        Example:
+            >>> practices = manager.fetch_latest_best_practices('empathy')
+            >>> print(practices['techniques'])
+        """
+        if not WEB_SEARCH_AVAILABLE or not tavily_search:
+            logger.logger.warning("Web search not available for best practices")
+            return None
+        
+        try:
+            # Search for current best practices
+            query = f"best practices teaching {skill_name} skills 2024 2025 techniques exercises"
+            logger.logger.info(f"🔍 Fetching best practices for: {skill_name}")
+            
+            results = tavily_search.invoke(query)
+            
+            best_practices = {
+                "skill": skill_name,
+                "query": query,
+                "research_summary": str(results)[:1000],  # Limit size
+                "fetched_at": datetime.utcnow().isoformat(),
+                "source": "web_research"
+            }
+            
+            logger.logger.info(f"✅ Retrieved best practices for {skill_name}")
+            return best_practices
+            
+        except Exception as e:
+            logger.logger.error(f"Error fetching best practices: {e}")
+            return None
+    
+    def update_training_with_best_practices(self, user: User) -> bool:
+        """
+        Update user's training plan with latest best practices from web.
+        
+        Called periodically (e.g., weekly) to ensure training stays current
+        with latest research and techniques.
+        
+        Args:
+            user: User object
+            
+        Returns:
+            True if update successful, False otherwise
+        """
+        try:
+            training_data = self._load_encrypted_training_data(user)
+            if not training_data:
+                return False
+            
+            # Check if we need to update (only once per week)
+            last_update = training_data.get("best_practices_updated")
+            if last_update:
+                last_update_date = datetime.fromisoformat(last_update)
+                if (datetime.utcnow() - last_update_date).days < 7:
+                    logger.logger.debug("Best practices recently updated, skipping")
+                    return True
+            
+            # Fetch best practices for each active training
+            for training_key, training_info in training_data.get("trainings", {}).items():
+                if training_info.get("status") == "active":
+                    skill_name = training_info.get("skill_name")
+                    practices = self.fetch_latest_best_practices(skill_name)
+                    if practices:
+                        training_info["latest_best_practices"] = practices
+            
+            # Update timestamp
+            training_data["best_practices_updated"] = datetime.utcnow().isoformat()
+            
+            # Save updated data
+            self._save_encrypted_training_data(user, training_data)
+            
+            logger.logger.info(f"✅ Updated best practices for user {user.id}")
+            return True
+            
+        except Exception as e:
+            logger.logger.error(f"Error updating best practices: {e}")
+            return False
+    
+    # =========================================================================
+    # ADAPTIVE LEARNING - PERSONALIZED TO USER'S STYLE
+    # =========================================================================
+    
+    def get_user_learning_style(self, user: User) -> str:
+        """
+        Get user's detected or preferred learning style.
+        
+        Learning styles:
+        - visual: Learns through examples, scenarios, imagery
+        - auditory: Learns through dialogue, verbal explanations
+        - kinesthetic: Learns through practice, exercises, role-play
+        - reading_writing: Learns through written explanations
+        - adaptive: System automatically adjusts (default)
+        
+        Args:
+            user: User object
+            
+        Returns:
+            Learning style string
+        """
+        try:
+            training_data = self._load_encrypted_training_data(user)
+            if training_data:
+                return training_data.get("learning_style", LearningStyle.ADAPTIVE)
+            return LearningStyle.ADAPTIVE
+        except Exception:
+            return LearningStyle.ADAPTIVE
+    
+    def set_user_learning_style(self, user: User, style: str) -> bool:
+        """
+        Set user's preferred learning style.
+        
+        Args:
+            user: User object
+            style: One of: visual, auditory, kinesthetic, reading_writing, adaptive
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        valid_styles = [
+            LearningStyle.VISUAL,
+            LearningStyle.AUDITORY,
+            LearningStyle.KINESTHETIC,
+            LearningStyle.READING_WRITING,
+            LearningStyle.ADAPTIVE
+        ]
+        
+        if style not in valid_styles:
+            logger.logger.warning(f"Invalid learning style: {style}")
+            return False
+        
+        try:
+            training_data = self._load_encrypted_training_data(user)
+            if not training_data:
+                training_data = self._get_empty_training_plan()
+            
+            training_data["learning_style"] = style
+            self._save_encrypted_training_data(user, training_data)
+            
+            logger.logger.info(f"✅ Set learning style to '{style}' for user {user.id}")
+            return True
+            
+        except Exception as e:
+            logger.logger.error(f"Error setting learning style: {e}")
+            return False
+    
+    def detect_learning_style_from_responses(
+        self, 
+        user: User, 
+        user_responses: List[str]
+    ) -> str:
+        """
+        Analyze user responses to detect preferred learning style.
+        
+        This method examines how the user responds to different teaching
+        approaches and determines what works best for them.
+        
+        Args:
+            user: User object
+            user_responses: List of user's recent responses
+            
+        Returns:
+            Detected learning style
+            
+        Note:
+            This is a heuristic approach. The AI will also adapt
+            in real-time based on conversation flow.
+        """
+        if not user_responses:
+            return LearningStyle.ADAPTIVE
+        
+        # Analyze response patterns
+        combined = " ".join(user_responses).lower()
+        
+        # Simple heuristic detection (AI does more sophisticated adaptation)
+        scores = {
+            LearningStyle.VISUAL: 0,
+            LearningStyle.AUDITORY: 0,
+            LearningStyle.KINESTHETIC: 0,
+            LearningStyle.READING_WRITING: 0
+        }
+        
+        # Visual indicators
+        if any(w in combined for w in ["show", "see", "picture", "imagine", "example"]):
+            scores[LearningStyle.VISUAL] += 1
+        
+        # Auditory indicators
+        if any(w in combined for w in ["tell", "explain", "discuss", "talk", "hear"]):
+            scores[LearningStyle.AUDITORY] += 1
+        
+        # Kinesthetic indicators
+        if any(w in combined for w in ["try", "practice", "do", "exercise", "hands-on"]):
+            scores[LearningStyle.KINESTHETIC] += 1
+        
+        # Reading/Writing indicators
+        if any(w in combined for w in ["read", "write", "list", "notes", "summary"]):
+            scores[LearningStyle.READING_WRITING] += 1
+        
+        # Get highest scoring style
+        if max(scores.values()) > 0:
+            detected = max(scores, key=scores.get)
+            logger.logger.info(f"Detected learning style: {detected}")
+            return detected
+        
+        return LearningStyle.ADAPTIVE
+    
+    def get_learning_style_prompt(self, user: User) -> str:
+        """
+        Get AI prompt instructions based on user's learning style.
+        
+        Args:
+            user: User object
+            
+        Returns:
+            String with teaching style instructions for AI
+        """
+        style = self.get_user_learning_style(user)
+        return LearningStyle.STYLE_PROMPTS.get(style, LearningStyle.STYLE_PROMPTS["adaptive"])

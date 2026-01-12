@@ -11,7 +11,7 @@ from typing import Optional, List, Dict, Any, Union, Generator, Set
 
 from pydantic import BaseModel, Field
 
-from fastapi import FastAPI, Depends, HTTPException, status, Request, Response, WebSocket, WebSocketDisconnect, Form
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Response, WebSocket, WebSocketDisconnect, Form, Body
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -1275,6 +1275,107 @@ async def register_page(request: Request):
         }
     )
 
+@app.post("/register")
+async def handle_register_form(
+    username: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    confirm_password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Handle HTML form registration submissions.
+    
+    Processes form data from the registration page, validates input,
+    checks for existing users, and creates new accounts.
+    
+    Args:
+        username: User's desired username (Form field)
+        email: User's email address (Form field)  
+        password: User's password (Form field)
+        confirm_password: Password confirmation (Form field)
+        db: Database session dependency
+        
+    Returns:
+        RedirectResponse: To login page on success, or back to register with error
+        
+    Raises:
+        RedirectResponse: For validation errors and redirects
+        
+    Observability:
+        - Logs successful registrations
+        - Logs validation failures and errors
+        - Tracks user creation metrics
+    """
+    try:
+        logger.info(f"Registration attempt for username: {username}")
+        
+        # Input validation
+        if not all([username, email, password]):
+            logger.warning(f"Registration failed - missing required fields for username: {username}")
+            return RedirectResponse(
+                url="/register?error=All+fields+are+required",
+                status_code=303
+            )
+            
+        if password != confirm_password:
+            logger.warning(f"Registration failed - password mismatch for username: {username}")
+            return RedirectResponse(
+                url="/register?error=Passwords+do+not+match",
+                status_code=303
+            )
+            
+        # Check for existing username
+        existing_user = db.query(User).filter(User.username == username).first()
+        if existing_user:
+            logger.warning(f"Registration failed - username already exists: {username}")
+            return RedirectResponse(
+                url="/register?error=Username+already+exists",
+                status_code=303
+            )
+            
+        # Check for existing email
+        existing_email = db.query(User).filter(User.hashed_email == email).first()
+        if existing_email:
+            logger.warning(f"Registration failed - email already exists: {email}")
+            return RedirectResponse(
+                url="/register?error=Email+already+registered",
+                status_code=303
+            )
+            
+        # Hash password and create user
+        hashed_password = pwd_context.hash(password)
+        encryption_key = Fernet.generate_key().decode()
+        
+        new_user = User(
+            username=username,
+            hashed_email=email,
+            hashed_password=hashed_password,
+            encryption_key=encryption_key
+        )
+        
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        
+        logger.info(f"✅ User registered successfully: {username} (ID: {new_user.id})")
+        
+        # Redirect to login page with success message
+        return RedirectResponse(
+            url="/login?registered=1",
+            status_code=303
+        )
+        
+    except Exception as e:
+        db.rollback()
+        error_msg = f"Registration failed: {str(e)}"
+        logger.error(f"Registration error for username {username}: {error_msg}", exc_info=True)
+        
+        return RedirectResponse(
+            url=f"/register?error={error_msg.replace(' ', '+')}",
+            status_code=303
+        )
+
 @app.get("/rooms")
 async def rooms_page(
     request: Request,
@@ -1481,21 +1582,48 @@ async def login(
             detail="Internal server error"
         )
 
-@app.post("/api/auth/register", tags=["Authentication"])
+@app.post(
+    "/api/auth/register",
+    tags=["Authentication"],
+    response_model=RegisterResponse,
+    responses={
+        200: {
+            "description": "User registered successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "message": "User registered successfully",
+                        "username": "john_doe",
+                        "email": "john@example.com"
+                    }
+                }
+            }
+        },
+        400: {"description": "Username or email already registered"}
+    }
+)
 async def register_user(
     request: Request,
     response: Response,
-    user_data: Optional[UserCreateAPI] = None,
-    username: Optional[str] = Form(None),
-    email: Optional[str] = Form(None),
-    password: Optional[str] = Form(None),
-    confirm_password: Optional[str] = Form(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    body: UserCreateAPI = Body(
+        ...,
+        openapi_examples={
+            "normal": {
+                "summary": "Normal registration",
+                "value": {
+                    "username": "john_doe",
+                    "email": "john@example.com",
+                    "password": "securepass123"
+                }
+            }
+        }
+    )
 ):
     """
     Register a new user account.
     
-    Supports both JSON (for Swagger UI) and form data (for HTML forms).
+    Supports both JSON (for Swagger UI/API) and form data (for HTML forms).
     
     **Request Body (JSON):**
     - **username**: Unique username (3-50 characters)
@@ -1508,29 +1636,11 @@ async def register_user(
     - **email**: Registered email
     """
     try:
-        # Determine if request is JSON or form data
-        content_type = request.headers.get('content-type', '')
-        is_json = 'application/json' in content_type
-        
-        # Extract data based on content type
-        if is_json and user_data:
-            # JSON request (Swagger UI)
-            username = user_data.username
-            email = user_data.email
-            password = user_data.password
-        else:
-            # Form data (HTML form)
-            if not username or not email or not password:
-                return RedirectResponse(
-                    url="/register?error=All+fields+are+required",
-                    status_code=303
-                )
-            # Check password confirmation for forms
-            if confirm_password and password != confirm_password:
-                return RedirectResponse(
-                    url="/register?error=Passwords+do+not+match",
-                    status_code=303
-                )
+        # Use the body parameter directly (JSON from Swagger/API)
+        username = body.username
+        email = body.email
+        password = body.password
+        is_json = True
         
         # Check if username already exists
         db_user = db.query(User).filter(User.username == username).first()

@@ -231,29 +231,82 @@ class LLMManager:
             **kwargs
         )
     
+    # Default timeout settings for local models (in seconds)
+    LM_STUDIO_TIMEOUT = 120  # 2 minutes - local models can be slow
+    LM_STUDIO_MAX_RETRIES = 3  # Retry up to 3 times on timeout
+    
     @staticmethod
     def _get_lm_studio_llm(
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         base_url: Optional[str] = None,
+        timeout: Optional[int] = None,
+        max_retries: Optional[int] = None,
         **kwargs
     ):
         """
-        Get LM Studio LLM instance (local model).
+        Get LM Studio LLM instance (local model) with timeout handling.
         
         LM Studio runs a local OpenAI-compatible API server.
         Default endpoint: http://localhost:1234/v1
         
+        Args:
+            model: Model name (LM Studio uses whatever is loaded)
+            temperature: Sampling temperature (0-1)
+            max_tokens: Maximum tokens in response
+            base_url: Custom endpoint URL
+            timeout: Request timeout in seconds (default: 120)
+            max_retries: Number of retries on timeout (default: 3)
+            **kwargs: Additional arguments passed to ChatOpenAI
+        
         Setup:
-        1. Download LM Studio: https://lmstudio.ai/
-        2. Download a model (e.g., Llama 3.2, Mistral)
-        3. Start the local server in LM Studio
-        4. Use this method to connect
+            1. Download LM Studio: https://lmstudio.ai/
+            2. Download a model (e.g., Llama 3.2, Mistral)
+            3. Start the local server in LM Studio
+            4. Use this method to connect
+            
+        Note:
+            Local models can be slower than cloud APIs. The default
+            timeout is 120 seconds with 3 retries to handle this.
         """
         model = model or "local-model"  # LM Studio uses the loaded model
         base_url = base_url or LLMConfig.LM_STUDIO_ENDPOINT
         max_tokens = max_tokens or 4096
+        timeout = timeout or LLMManager.LM_STUDIO_TIMEOUT
+        max_retries = max_retries or LLMManager.LM_STUDIO_MAX_RETRIES
+        
+        # MCP JSON Schema for tool calling - forces structured JSON output
+        # This enables function calling for local models via JSON response format
+        mcp_json_schema = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "mcp_tool_response",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "formatted_output": {
+                            "type": ["string", "null"],
+                            "description": "Natural language response, or null if tools needed"
+                        },
+                        "tool_calls": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string"},
+                                    "arguments": {"type": "object"}
+                                },
+                                "required": ["name", "arguments"]
+                            },
+                            "description": "Tool calls to execute"
+                        }
+                    },
+                    "required": ["formatted_output", "tool_calls"]
+                }
+            }
+        }
         
         return ChatOpenAI(
             model=model,
@@ -261,6 +314,9 @@ class LLMManager:
             max_tokens=max_tokens,
             base_url=base_url,
             api_key="lm-studio",  # LM Studio doesn't require a real API key
+            timeout=timeout,  # Timeout for requests
+            max_retries=max_retries,  # Retry on transient errors
+            model_kwargs={"response_format": mcp_json_schema},  # Force MCP JSON output
             **kwargs
         )
     
